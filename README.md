@@ -152,6 +152,8 @@ We can model repeating groups in the q dictionary representation of our FIX mess
 In the example below we send a NewOrderSingle with a 2 underlying legs and 2 parties:
 
 ```apl
+/ in the initiator
+
 message:()!();
 message[.fix.tagNameNumMap`BeginString]: "FIX.4.4";
 message[.fix.tagNameNumMap`SenderCompID]: string .fix.session.senderCompID;
@@ -175,6 +177,27 @@ message[.fix.tagNameNumMap`NoPartyIDs]:(partiesInst1; partiesInst2);
 message[.fix.tagNameNumMap`OrderQty]: "876.0";
 
 .fix.send[message];
+
+/ in the acceptor
+
+q)8  | "FIX.4.4"
+9  | 229f
+35 | ,"D"
+34 | 133i
+49 | "CTRE"
+52 | 2022.02.28D23:03:30.940000000
+56 | "BROKER"
+11 | "SHD2015.04.04"
+21 | "2"
+38 | 876f
+40 | "1"
+54 | "2"
+55 | "TESTSYM"
+60 | 2016.03.04D14:21:36.567000000
+453| (448 447!("BRIAN";"C");448 447!("ACME";"C"))
+711| (311 879 884!("SYMBOL1";876f;876f);311 879!("SYMBOL2";877f))
+10 | "189"
+
 ```
 
 Nested repeated groups are also supported: see the .fix.sendNewOrderSingleWithSubParties function in fix.q for sending a sub party information within a party group.
