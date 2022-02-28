@@ -5,9 +5,6 @@ implementation of a FIX engine. The accompanying document also describes how to 
 the FIXimulator tool for testing purposes. The implementation is currently in an alpha state and has not been used in
 a production system to date. Bugs and features requests should be made through GitHub.
 
-The PDF documentation for this resource can be found [here][gitpdfdoc] and also on the [AquaQ Analytics][aquaqresources]
-website.
-
 Installation & Setup
 --------------------
 
@@ -36,12 +33,12 @@ Install FIX Library
 This project provides a simple shell script that will handle the build process for you. It will compile all the artifacts in a /tmp folder and then copy the resulting package into your source directory. You can look at this script for an example of how to run the CMake build process manually. Whilst inside the quickfix repo, run the following.
 
 ```sh
-$ git clone https://github.com/AquaQAnalytics/kdb-fix-adaptor
+$ git clone https://github.com/ccjtre/kdb-fix-adaptor
 $ cd kdb-fix-adaptor
 $ ./package.sh
 ```
 
-A successful build will place a .tar.gz file in the fix-build directory that contains the shared object, a q script to load the shared object into the .fix namespace and some example configuration files. Unzip this file.
+A successful build will place a .tar.gz file in the fix-build directory that contains the shared object, a q script to load the shared object into the .fix namespace. Unzip this file.
 
 
 **Note on dynamic exceptions:
@@ -88,22 +85,34 @@ a 32 bit binary.
 Starting Servers (Acceptors) and Clients (Initiators)
 ----------------
 
-The .fix.create function is common to both starting Acceptors and Initiators. 
+The .fix.init function is common to both starting Acceptors and Initiators. 
 
-The Acceptor is the server side component of a FIX engine that provides some sort of service by binding to a port and accepting messages. To start an acceptor you need to call the .fix.create function with acceptor as the first argument. The second argument may be either an empty list or a specified configuration, e.g :sessions/sample.ini. The .fix.create function called as an acceptor will start a background thread that will receive and validate messages and finally forward them to the .fix.onrecv function if the message is well formed.
+The Acceptor is the server side component of a FIX engine that provides some sort of service by binding to a port and accepting messages.
+To start an acceptor you need to call the .fix.init function with the following arguments:
+
+- senderCompID (sym): The SenderCompID of your acceptor. Should agree with the INI configuration file
+- targetCompID (sym): The intended TargetCompID (initiator) for your acceptor. Should agree with the INI configuration file
+- counterPartyType (sym): `acceptor
+- configFile: the INI configuration file for this FIX session
+- dataDictFile: the data dictionary for this FIX session. Should agree with the INI configuration file. This is used to generate helper dictionaries in the q session; the data dictionary used by QuickFIX for validation will be sourced via the INI file.
+
+The .fix.init function called as an acceptor will start a background thread that will receive and validate messages and finally forward them to the .fix.onRecv function if the message is well formed.
 
 ```apl
 / q fix.q
-q) .fix.create[`acceptor;()]
-Defaulting to sample.ini config
+q).fix.init[`BROKER;`CTRE;`acceptor;`:src/config/sessions/sample.ini;`:src/config/spec/FIX44.xml]
+GetKMaps - Loading src/config/spec/FIX44.xml
+CreateFIXMaps - Loading src/config/spec/FIX44.xml
 Creating Acceptor
 ```
 
-The Initiator is the client side component of the FIX engine and is intended to be used to connect to acceptors to send messages. To start an initiator you need to call the .fix.create function. This will create a background thread that will open a socket to the target acceptor and allow you to send/receive messages.
+The Initiator is the client side component of the FIX engine and is intended to be used to connect to acceptors to send messages. To start an initiator you need to call the .fix.init function. This will create a background thread that will open a socket to the target acceptor and allow you to send/receive messages.
 
 ```apl
 / q fix.q
-q) .fix.create[`initiator;`:sessions/sample.ini]
+q).fix.init[`CTRE;`BROKER;`initiator;`:src/config/sessions/sample.ini;`:src/config/spec/FIX44.xml]
+GetKMaps - Loading src/config/spec/FIX44.xml
+CreateFIXMaps - Loading src/config/spec/FIX44.xml
 Creating Initiator
 ```
 
@@ -117,14 +126,16 @@ In order to determine who the message will be sent to, the library will read the
 ```apl
 / Session 1 - Create an Acceptor
 / q fix.q
-q) .fix.create[`acceptor;()]
-Defaulting to sample.ini config
+q).fix.init[`BROKER;`CTRE;`acceptor;`:src/config/sessions/sample.ini;`:src/config/spec/FIX44.xml]
+GetKMaps - Loading src/config/spec/FIX44.xml
+CreateFIXMaps - Loading src/config/spec/FIX44.xml
 Creating Acceptor
 
 / Session 2 - Create an Initiator
 / q fix.q
-q) .fix.create[`initiator;()]
-Defaulting to sample.ini config
+q).fix.init[`CTRE;`BROKER;`initiator;`:src/config/sessions/sample.ini;`:src/config/spec/FIX44.xml]
+GetKMaps - Loading src/config/spec/FIX44.xml
+CreateFIXMaps - Loading src/config/spec/FIX44.xml
 Creating Initiator
 
 / We can create a dictionary
@@ -134,6 +145,46 @@ q) message: (8 11 35 46 ...)!("FIX.4.4";175;enlist "D";enlist "8" ...)
 q) .fix.send[message]
 ```
 
+Repeating Groups
+----------------
+
+We can model repeating groups in the q dictionary representation of our FIX message by mapping a list of dictionaries to the corresponding NUMINGROUP key in our dictionary.
+In the example below we send a NewOrderSingle with a 2 underlying legs and 2 parties:
+
+```apl
+message:()!();
+message[.fix.tagNameNumMap`BeginString]: "FIX.4.4";
+message[.fix.tagNameNumMap`SenderCompID]: string .fix.session.senderCompID;
+message[.fix.tagNameNumMap`TargetCompID]: string .fix.session.targetCompID;
+message[.fix.tagNameNumMap`MsgType]: string .fix.msgNameTypeMap`NewOrderSingle;
+message[.fix.tagNameNumMap`ClOrdID]: "SHD2015.04.04";
+message[.fix.tagNameNumMap`Symbol]: "TESTSYM";
+message[.fix.tagNameNumMap`Side]: enlist "2";
+message[.fix.tagNameNumMap`HandlInst]: enlist "2";
+message[.fix.tagNameNumMap`TransactTime]: 2016.03.04D14:21:36.567000000;
+message[.fix.tagNameNumMap`OrdType]: enlist "1";
+
+underlyingInst1:.fix.tagNameNumMap[`UnderlyingSymbol`UnderlyingQty`UnderlyingStartValue]!("SYMBOL1";"876.0";"876.0");
+underlyingInst2:.fix.tagNameNumMap[`UnderlyingSymbol`UnderlyingQty]!("SYMBOL2";"877.0");
+message[.fix.tagNameNumMap`NoUnderlyings]:(underlyingInst1; underlyingInst2);
+
+partiesInst1:.fix.tagNameNumMap[`PartyID`PartyIDSource]!("BRIAN";enlist "C");
+partiesInst2:.fix.tagNameNumMap[`PartyID`PartyIDSource]!("ACME";enlist "C");
+message[.fix.tagNameNumMap`NoPartyIDs]:(partiesInst1; partiesInst2);
+
+message[.fix.tagNameNumMap`OrderQty]: "876.0";
+
+.fix.send[message];
+```
+
+Nested repeated groups are also supported: see the .fix.sendNewOrderSingleWithSubParties function in fix.q for sending a sub party information within a party group.
+
+Note that tag order in repeating groups must match the order specified in your data dictionary.
+
+Helper dictionaries
+-------------------
+
+The above examples use two helper dictionaries which are populated when you create an acceptor or initiator instance: .fix.tagNameNumMap, which maps FIX field names to the corresponding numerical tag, and .fix.msgNameTypeMap which maps message type names to their correponding 'MsgType' char value. Both adhere to the data dictionary specified in the .fix.init call.
 
 Acknowledgements
 ----------------
