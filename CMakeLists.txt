@@ -7,7 +7,7 @@ set(PROGRAM_NAME          "kdbfix")
 set(PROGRAM_VER           "0.5.1")
 set(PROGRAM_MAIN          "src/main.cxx")
 set(QUICKFIX_VER          "1.14.3")
-set(KX_VER                "3")
+set(KX_VER                "4")
 set(BINARY_NAME           "${PROGRAM_NAME}.${PROGRAM_VER}")
 
 option(BUILD_BOOST        "build with the boost libraries available on the path"      ON)
@@ -59,16 +59,7 @@ configure_file("${CMAKE_SOURCE_DIR}/README.md" "${CMAKE_BINARY_DIR}/README.md")
 configure_file("${CMAKE_SOURCE_DIR}/LICENSE.md" "${CMAKE_BINARY_DIR}/LICENSE.md")
 configure_file("${CMAKE_SOURCE_DIR}/src/config/fix.q" "${CMAKE_BINARY_DIR}/fix.q")
 
-file(COPY "${CMAKE_SOURCE_DIR}/src/config/spec" DESTINATION "${CMAKE_BINARY_DIR}")
-file(COPY "${CMAKE_SOURCE_DIR}/src/config/log" DESTINATION "${CMAKE_BINARY_DIR}")
-file(COPY "${CMAKE_SOURCE_DIR}/src/config/sessions" DESTINATION "${CMAKE_BINARY_DIR}")
-
 add_custom_target(build_package COMMAND
     ${CMAKE_COMMAND} -E tar "cfv" "${CMAKE_SOURCE_DIR}/${PROGRAM_NAME}-${PROGRAM_VER}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}.tar.gz"
     "${CMAKE_BINARY_DIR}/${BINARY_NAME}.so"
-    "${CMAKE_BINARY_DIR}/README.md"
-    "${CMAKE_BINARY_DIR}/LICENSE.md"
-    "${CMAKE_BINARY_DIR}/spec"
-    "${CMAKE_BINARY_DIR}/log"
-    "${CMAKE_BINARY_DIR}/sessions"
     "${CMAKE_BINARY_DIR}/fix.q")

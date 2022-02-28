@@ -8,6 +8,7 @@
 #include <quickfix/FileStore.h>
 #include <quickfix/FileLog.h>
 #include <quickfix/FieldMap.h>
+#include <quickfix/Group.h>
 #include <quickfix/ThreadedSocketAcceptor.h>
 #include <quickfix/ThreadedSocketInitiator.h>
 #include <quickfix/Log.h>
@@ -19,6 +20,7 @@
 #include <config.h>
 #include <string.h>
 #include <pugixml.hpp>
+#include <set>
 #include <unordered_map>
 #include <string>
 #include <vector>
@@ -36,8 +38,9 @@
 
 std::string typeconvert(std::string s);
 std::string typedtostring(K x);
-void CreateTypeMap(void);
+void CreateFIXMaps(K dataDictFile);
 K convertmsgtype(std::string field, std::string type);
+std::set<int> repeatingGroupTags;
 std::unordered_map<int,std::string> typemap;
 
 
@@ -57,21 +60,33 @@ class FixEngineApplication : public FIX::Application
         throw (FIX::FieldNotFound, FIX::IncorrectDataFormat, FIX::IncorrectTagValue, FIX::UnsupportedMessageType);
 };
 
-static void FillFromIterators(FIX::FieldMap::Fields::const_iterator begin, FIX::FieldMap::Fields::const_iterator end, K* keys, K* values)
+static void addFIXAtomsToKDict(FIX::FieldMap::Fields::const_iterator begin, FIX::FieldMap::Fields::const_iterator end, K* keys, K* values)
 {
     for (auto it = begin; it != end; it++) {
         J tag = (J) it->getTag();
-        auto str = it->getString().c_str();
-
-        std::unordered_map<int, std::string>::const_iterator found = typemap.find(tag);
-        ja(keys, &tag);
-
-        if(55==tag){
-            jk(values, ks(const_cast<char *>(str)));
+        if (repeatingGroupTags.find(tag) == repeatingGroupTags.end()){
+            ja(keys, &tag);
+	    std::unordered_map<int, std::string>::const_iterator found = typemap.find(tag);
+	    auto str = it->getString().c_str();
+            jk(values, convertmsgtype(str, found->second));
 	}
-	else{
-	    jk(values, convertmsgtype(str, found->second));
-	};
+    }
+}
+
+static void addFIXGroupsToKDict(FIX::FieldMap::Groups::const_iterator g_begin, FIX::FieldMap::Groups::const_iterator g_end, K* keys, K* values)
+{
+    for (auto git = g_begin; git != g_end; git++) {
+        J groupTag = (J) git->first;
+	ja(keys, &groupTag);
+	K kGroup = ktn(0, 0);
+	for (auto it = git->second.begin(); it != git->second.end(); it++) {
+            K kGroupInstKeys = ktn(KJ, 0);
+            K kGroupInstValues = ktn(0, 0);
+	    addFIXAtomsToKDict((*it)->begin(), (*it)->end(), &kGroupInstKeys, &kGroupInstValues);
+	    addFIXGroupsToKDict((*it)->g_begin(), (*it)->g_end(), &kGroupInstKeys, &kGroupInstValues);
+	    jk(&kGroup, xD(kGroupInstKeys, kGroupInstValues));
+        }
+	jk(values, kGroup);
     }
 }
 
@@ -83,10 +98,11 @@ static K ConvertToDictionary(const FIX::Message& message)
     auto header = message.getHeader();
     auto trailer = message.getTrailer();
 
-    FillFromIterators(header.begin(), header.end(), &keys, &values);
-    FillFromIterators(message.begin(), message.end(), &keys, &values);
-    FillFromIterators(trailer.begin(), trailer.end(), &keys, &values);
-    
+    addFIXAtomsToKDict(header.begin(), header.end(), &keys, &values);
+    addFIXAtomsToKDict(message.begin(), message.end(), &keys, &values);
+    addFIXGroupsToKDict(message.g_begin(), message.g_end(), &keys, &values);
+    addFIXAtomsToKDict(trailer.begin(), trailer.end(), &keys, &values);
+
     return xD(keys, values);
 }
 
@@ -141,6 +157,46 @@ void FixEngineApplication::fromApp(const FIX::Message& message, const FIX::Sessi
 
 #pragma GCC diagnostic pop
 
+void convertKGroupInstToFIX(FIX::Group& fixGroup, K kGroupInst)
+{
+    K keys = kK(kGroupInst)[0];
+    K values = kK(kGroupInst)[1];
+    for (int i = 0; i < keys->n; i++) {
+        int tag = kJ(keys)[i];
+        K value = kK(values)[i];
+        if (value->t == 0 || value->t == 99) {
+            for (int i = 0; i < value->n; i++) {
+                K kGroupInst = kK(value)[i];
+                K keys = kK(kGroupInst)[0];
+                int delimTag = kJ(keys)[(keys->n)-1];
+		std::vector<int> tagOrder;
+                for (int k = 0; k < keys->n; k++)
+                    tagOrder.push_back(kJ(keys)[k]);
+                FIX::Group fixSubGroup(tag, delimTag, tagOrder.data());
+                convertKGroupInstToFIX(fixSubGroup, kGroupInst);
+                fixGroup.addGroup(fixSubGroup);
+            }
+        } else {
+                fixGroup.setField(tag, typedtostring(value));
+        }
+    }
+}
+
+void addKGroupToFIXMessage(FIX::Message& message, int groupTag, K kGroup)
+{
+    for (int i = 0; i < kGroup->n; i++) {
+        K kGroupInst = kK(kGroup)[i];
+        K keys = kK(kGroupInst)[0];
+        int delimTag = kJ(keys)[(keys->n)-1];
+	std::vector<int> tagOrder;
+	for (int k = 0; k < keys->n; k++)
+            tagOrder.push_back(kJ(keys)[k]);
+        FIX::Group fixGroup(groupTag, delimTag, tagOrder.data());
+        convertKGroupInstToFIX(fixGroup, kGroupInst);
+        message.addGroup(fixGroup);
+    }
+}
+
 extern "C"
 K SendMessageDict(K x)
 {
@@ -150,26 +206,19 @@ K SendMessageDict(K x)
 
     K keys = kK(x)[0];
     K values = kK(x)[1];
-
-    auto beginString = std::string("");
-    auto senderCompId = std::string("");
-    auto targetCompId = std::string("");
-    auto sessionQualifier = std::string("");
  
     FIX::Message message;
     FIX::Header &header = message.getHeader();
 
     for (int i = 0; i < keys->n; i++) {
         int tag = kJ(keys)[i];
-
-        auto rep = typedtostring(kK(values)[i]);
-	
-        if (tag == 35 || tag == 8 || tag == 49 || tag == 56) {
-            header.setField(tag, rep);
-        } else {
-            message.setField(tag, rep);
-        }
-	
+	K value = kK(values)[i];
+        if (tag == 35 || tag == 8 || tag == 49 || tag == 56)
+            header.setField(tag, typedtostring(value));
+        else if (value->t == 0 || value->t == 99)
+            addKGroupToFIXMessage(message, tag, value);
+	else
+            message.setField(tag, typedtostring(value));
     }
 
     try {
@@ -200,11 +249,10 @@ K RecieveData(I x)
 
     ReadBytes(size, &buf);
     memcpy(kG(bytes), &buf, (size_t) size);
-    K r = k(0, (char *)".fix.onrecv", d9(bytes), (K) 0);
+    K r = k(0, (char *)".fix.onRecv", d9(bytes), (K) 0);
     r0(bytes);
 
     if (r != 0) { r0(r); }
-
     return (K) 0;
 }
 
@@ -234,47 +282,100 @@ K CreateThreadedSocket(K x) {
     return (K) 0;
 }
 
-extern "C"
-K CreateInitiator(K x) { return CreateThreadedSocket<FIX::ThreadedSocketInitiator>(x); }
+
+void CreateFIXMaps(K dataDictFile)
+{
+    std::string path = std::string(dataDictFile->s);
+    path.erase(std::remove(path.begin(), path.end(), ':'), path.end());
+
+    std::cout << "CreateFIXMaps - Loading " << path << std::endl;
+    pugi::xml_document doc;
+    if(!doc.load_file(path.c_str())) throw std::runtime_error("XML could not be loaded");
+
+    pugi::xml_node fields = doc.child("fix").child("fields");
+    for(pugi::xml_node field = fields.child("field"); field; field = field.next_sibling("field"))
+    {
+        int tag = field.attribute("number").as_int();
+        std::string fixType = field.attribute("type").value();
+        if (fixType == "NUMINGROUP")
+            repeatingGroupTags.insert(tag);
+        std::string kType = typeconvert(fixType);
+        typemap.insert({tag, kType});
+    }
+}
+
+K GetKMaps(K dataDictFile)
+{
+    std::string path = std::string(dataDictFile->s);
+    path.erase(std::remove(path.begin(), path.end(), ':'), path.end());
+
+    std::cout << "GetKMaps - Loading " << path << std::endl;
+    pugi::xml_document doc;
+    if(!doc.load_file(path.c_str())) throw std::runtime_error("XML could not be loaded");
+
+    K names = ktn(KS, 0);
+    K tags = ktn(KJ, 0);
+    pugi::xml_node fields = doc.child("fix").child("fields");
+    for(pugi::xml_node field = fields.child("field"); field; field = field.next_sibling("field"))
+    {
+	S name = ss(const_cast<char*>(field.attribute("name").value()));
+        J tag = (J) field.attribute("number").as_int();
+	js(&names, name);
+	ja(&tags, &tag);
+    }
+
+    K msgTypeNames = ktn(KS, 0);
+    K msgTypeValues = ktn(KS, 0);
+    pugi::xml_node messages = doc.child("fix").child("messages");
+    for(pugi::xml_node message = messages.child("message"); message; message = message.next_sibling("message"))
+    {
+        S msgTypeName = ss(const_cast<char*>(message.attribute("name").value()));
+        S msgTypeValue = ss(const_cast<char*>(message.attribute("msgtype").value()));
+        js(&msgTypeNames, msgTypeName);
+        js(&msgTypeValues, msgTypeValue);
+    }
+    return knk(2, xD(names, tags), xD(msgTypeNames, msgTypeValues));
+}
 
 extern "C"
-K CreateAcceptor(K x) { return CreateThreadedSocket<FIX::ThreadedSocketAcceptor>(x); }
+K Create(K counterPartyType, K configFile, K dataDictFile) {
 
-
-extern "C"
-K Create(K x, K y) {
-
-    if(-11 != x->t){
+    if(-11 != counterPartyType->t){
         return krr((S) "type");
     }
 
-    K z = ks((S) "sessions/sample.ini");
+    if(-11 != dataDictFile->t){
+        return krr((S) "type");
+    }
+    CreateFIXMaps(dataDictFile);
 
-    if (-11 == y->t){
-	r0(z);
-	z = ks((S) y->s);
+    K defaultConfigFile = ks((S) "src/config/sessions/sample.ini");
+
+    if (-11 == configFile->t){
+	r0(defaultConfigFile);
+	defaultConfigFile = ks((S) configFile->s);
     }
     else{
         std::cout << "Defaulting to sample.ini config" << std::endl;
     }
        
-    if(strcmp("initiator",x->s) == 0){
+    if(strcmp("initiator",counterPartyType->s) == 0){
         std::cout << "Creating Initiator" << std::endl;
-	K ret = CreateThreadedSocket<FIX::ThreadedSocketInitiator>(z);
-	r0(z);
+	K ret = CreateThreadedSocket<FIX::ThreadedSocketInitiator>(defaultConfigFile);
+	r0(defaultConfigFile);
 	return ret;
     }
-    else if(strcmp("acceptor",x->s) == 0){
+    else if(strcmp("acceptor",counterPartyType->s) == 0){
         std::cout << "Creating Acceptor" << std::endl;
-	K ret = CreateThreadedSocket<FIX::ThreadedSocketAcceptor>(z);
-	r0(z);
+	K ret = CreateThreadedSocket<FIX::ThreadedSocketAcceptor>(defaultConfigFile);
+	r0(defaultConfigFile);
 	return ret;
     }
     else{
         return krr((S) "type");
     }
 
-    r0(z);
+    r0(defaultConfigFile);
 
     return (K) 0;
 }
@@ -315,41 +416,22 @@ K LoadLibrary(K x)
     printf(" compiler flags » %-5s                              \n", BUILD_COMPILER_FLAGS);
     printf("████████████████████████████████████████████████████\n");
 
-    K keys = ktn(KS, 6);
-    K values = ktn(0, 6);
+    K keys = ktn(KS, 5);
+    K values = ktn(0, 5);
 
-    kS(keys)[0] = ss((S) "initiator");
-    kS(keys)[1] = ss((S) "acceptor");
-    kS(keys)[2] = ss((S) "send");
-    kS(keys)[3] = ss((S) "onrecv");
-    kS(keys)[4] = ss((S) "create");
-    kS(keys)[5] = ss((S) "version");
+    kS(keys)[0] = ss((S) "send");
+    kS(keys)[1] = ss((S) "onRecv");
+    kS(keys)[2] = ss((S) "create");
+    kS(keys)[3] = ss((S) "version");
+    kS(keys)[4] = ss((S) "getKMaps");
 
-
-    kK(values)[0] = dl((void *) CreateInitiator, 1);
-    kK(values)[1] = dl((void *) CreateAcceptor, 1);
-    kK(values)[2] = dl((void *) SendMessageDict, 1);
-    kK(values)[3] = dl((void *) OnRecv, 1);
-    kK(values)[4] = dl((void *) Create, 2);
-    kK(values)[5] = dl((void *) Version, 1);
-
-    CreateTypeMap();
+    kK(values)[0] = dl((void *) SendMessageDict, 1);
+    kK(values)[1] = dl((void *) OnRecv, 1);
+    kK(values)[2] = dl((void *) Create, 3);
+    kK(values)[3] = dl((void *) Version, 1);
+    kK(values)[4] = dl((void *) GetKMaps, 1);
 
     return xD(keys, values);
-}
-
-void CreateTypeMap(void)
-{  
-    pugi::xml_document doc;
-    if(!doc.load_file("./spec/FIX42.xml")) throw std::runtime_error("XML could not be loaded");
-    pugi::xml_node fields = doc.child("fix").child("fields");
-    
-    for(pugi::xml_node field = fields.child("field"); field; field = field.next_sibling("field"))
-    {
-        int value = field.attribute("number").as_int();		
-        std::string fieldattr = typeconvert(field.attribute("type").value());
-        typemap.insert({value, fieldattr});
-    }   
 }
 
 std::string typeconvert(std::string s)
