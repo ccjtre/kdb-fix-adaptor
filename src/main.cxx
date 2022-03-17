@@ -13,6 +13,8 @@
 #include <quickfix/ThreadedSocketInitiator.h>
 #include <quickfix/Log.h>
 #include <quickfix/SessionSettings.h>
+#include <quickfix/DataDictionary.h>
+#include <quickfix/SessionID.h>
 
 #include "socketpair.h"
 #include <kx/k.h>
@@ -32,6 +34,7 @@
 #include <chrono>
 #include <iomanip>
 #include <algorithm>
+#include <fstream>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated"
@@ -306,6 +309,10 @@ void CreateFIXMaps(K dataDictFile)
 
 K GetKMaps(K dataDictFile)
 {
+
+    if(-11 != dataDictFile->t)
+        return krr((S) "type");
+
     std::string path = std::string(dataDictFile->s);
     path.erase(std::remove(path.begin(), path.end(), ':'), path.end());
 
@@ -402,6 +409,44 @@ K Version(K x){
 }
 
 extern "C"
+K ReplayFIXLog(K dataDictFile, K fixLogFile) {
+
+    if(-11 != dataDictFile->t)
+        return krr((S) "type");
+    if(-11 != fixLogFile->t)
+        return krr((S) "type");
+
+    // create the data dictionary
+    std::string dataDictFilePath = std::string(dataDictFile->s);
+    dataDictFilePath.erase(std::remove(dataDictFilePath.begin(), dataDictFilePath.end(), ':'), dataDictFilePath.end());
+    std::ifstream dataDictFileStream(dataDictFilePath);
+    FIX::DataDictionary dataDict(dataDictFileStream);
+
+    // create the log filestream
+    std::string fixLogFilePath = std::string(fixLogFile->s);
+    fixLogFilePath.erase(std::remove(fixLogFilePath.begin(), fixLogFilePath.end(), ':'), fixLogFilePath.end());
+    std::ifstream fixLog;
+    fixLog.open(fixLogFilePath);
+
+    // create the SessionID
+    const FIX::SessionID sessionID;
+
+    // create the app
+    FixEngineApplication application;
+
+    if (fixLog) {
+        std::string line;
+        while (getline(fixLog, line)) {
+            FIX::Message message(line.substr(3+line.rfind(" : ")), dataDict, false);
+            application.fromApp(message, sessionID);
+        }
+        return (K) 0;
+    } else {
+        return krr((S) "os");
+    }
+}
+
+extern "C"
 K LoadLibrary(K x)
 {
     printf("████████████████████████████████████████████████████\n");
@@ -416,20 +461,22 @@ K LoadLibrary(K x)
     printf(" compiler flags » %-5s                              \n", BUILD_COMPILER_FLAGS);
     printf("████████████████████████████████████████████████████\n");
 
-    K keys = ktn(KS, 5);
-    K values = ktn(0, 5);
+    K keys = ktn(KS, 6);
+    K values = ktn(0, 6);
 
     kS(keys)[0] = ss((S) "send");
     kS(keys)[1] = ss((S) "onRecv");
     kS(keys)[2] = ss((S) "create");
     kS(keys)[3] = ss((S) "version");
     kS(keys)[4] = ss((S) "getKMaps");
+    kS(keys)[5] = ss((S) "replayFIXLog");
 
     kK(values)[0] = dl((void *) SendMessageDict, 1);
     kK(values)[1] = dl((void *) OnRecv, 1);
     kK(values)[2] = dl((void *) Create, 3);
     kK(values)[3] = dl((void *) Version, 1);
     kK(values)[4] = dl((void *) GetKMaps, 1);
+    kK(values)[5] = dl((void *) ReplayFIXLog, 2);
 
     return xD(keys, values);
 }
