@@ -17,7 +17,7 @@ FIX messages consist of ASCII SOH-delimited (Start of Heading) key-value pairs o
 -	`TargetCompID` (56): Unique identifier for counterparty receiving the message
 
 The body contains the business attributes of the message (for example, `OrderQty` (38) for a `NewOrderSingle`) whereas the trailer will generally just consist of the message `CheckSum` (10) which serves as the end-of-message delimiter along with its trailing SOH character.
-Apart from the four fields mentioned above, QuickFIX will automatically add all required header and trailer fields to a message before sending, including `BodyLength` (9), `MsgSeqNum` (34) and SendingTime (52).
+Apart from the four fields mentioned above, QuickFIX will automatically add all required header and trailer fields to a message before sending, including `BodyLength` (9), `MsgSeqNum` (34) and `SendingTime` (52).
 
 Examples of a typical `NewOrderSingle` (`MsgType`=D) and `ExecutionReport` (`MsgType`=8) are as follows:
 
@@ -385,9 +385,9 @@ q)
 ## Repeating groups in the FIX protocol
 
 Sometimes we need to represent array-like data structures within a FIX message. One of the more intuitive examples is sending an order to a broker to execute a two-legged strategy. How can we embed the symbology, order quantities and other information of the two legs in the flat message structure of the FIX protocol if they use the same tags?
-The FIX protocol achieves this via the concept of ‘Repeating groups’. For any ‘repeatable’ collections of tags that we may need to define in our messages (be it for defining multiple legs, market depth levels, etc.), the data dictionary of our chosen FIX specification will define a field of type `NUMINGROUP`. This NUMINGROUP field is placed before the repeated groups of tags in the message and denotes how many repetitions of the group occur.
+The FIX protocol achieves this via the concept of ‘Repeating groups’. For any ‘repeatable’ collections of tags that we may need to define in our messages (be it for defining multiple legs, market depth levels, etc.), the data dictionary of our chosen FIX specification will define a field of type `NUMINGROUP`. This `NUMINGROUP` field is placed before the repeated groups of tags in the message and denotes how many repetitions of the group occur.
 
-Let’s take our two-legged order example. Implementations vary across brokerages, but let’s assume that our chosen broker adheres to the 4.4 FIX specification and insists that multi-leg orders should be structured with the `UnderlyingInstrument` repeating group (NUMINGROUP tag: 711).
+Let’s take our two-legged order example. Implementations vary across brokerages, but let’s assume that our chosen broker adheres to the 4.4 FIX specification and insists that multi-leg orders should be structured with the `UnderlyingInstrument` repeating group (`NUMINGROUP` tag: 711).
 
 To send a multi-legged market order, the broker specifies that that we need to define at a minimum the `UnderlyingSymbol` (311) and `UnderlyingQty` (389) for each leg. Our FIX message would be structured as follows:
 
@@ -397,7 +397,7 @@ To send a multi-legged market order, the broker specifies that that we need to d
 ```
 
 
-The 711=2 (`NoUnderlyings`) denotes that two instances of the `UnderlyingInstrument` group are encoded in the message immediately after that field. The FIX protocol interprets each ensuing field to be a member of the same group instance until a repeated tag is encountered (i.e.: the second instance of the 311 tag above); when this happens it is interpreted as the start of a new instance of the group. This continues until the protocol encounters a field that is not defined in the repeating group as per the data dictionary (i.e.: in our example above, fields follow the second 879 tag instance are taken to be part of the top level of the message). For these reasons the FIX protocol (and by extension the QuickFIX engine) enforces that the tag order of any repeating groups you set in a message matches the order in the data dictionary for your FIX specification.
+The 711=2 (`NoUnderlyings`) denotes that two instances of the `UnderlyingInstrument` group are encoded in the message immediately after that field. The FIX protocol interprets each ensuing field to be a member of the same group instance until a repeated tag is encountered (i.e.: the second instance of the 311 tag above); when this happens it is interpreted as the start of a new instance of the group. This continues until the protocol encounters a field that is not defined in the repeating group as per the data dictionary (i.e.: in our example above, fields following the second 879 tag instance are taken to be part of the top level of the message). For these reasons the FIX protocol (and by extension the QuickFIX engine) enforces that the tag order of any repeating groups you set in a message matches the order in the data dictionary for your FIX specification.
 
 For clarity, the `NUMINGROUP` field of a repeating group will be used to refer to the repeating group as a whole in the following examples.
 
@@ -462,7 +462,7 @@ q).fix.sendNewOrderSingleWithUnderlyings[]
 ```
 
 
-Note that the library support asymmetric instances in the same repeating group provided that tag order adheres to the data dictionary: in the above example we’ve included an additional `UnderlyingStartValue` field in the first instance of the `NoUnderlyings` (711) group. Also note that multiple repeating groups in the same message are supported: see the addition of the `NoPartyIDs` (453) repeating group. The message can then be passed to `.fix.send` in the same way as before.
+Note that the library supports asymmetric instances in the same repeating group provided that tag order adheres to the data dictionary: in the above example we’ve included an additional `UnderlyingStartValue` field in the first instance of the `NoUnderlyings` (711) group. Also note that multiple repeating groups in the same message are supported: see the addition of the `NoPartyIDs` (453) repeating group. The message can then be passed to `.fix.send` in the same way as before.
 
 A more common use case of repeating groups in the FIX protocol is in the [`MarketDataRequest` (`MsgType`=V) message type](https://www.onixs.biz/fix-dictionary/4.4/msgType_V_86.html). This message contains the mandatory `NoMDEntryTypes` (267) tag which denotes the number of `MDEntryType` (269) elements in the request. The `MDEntryType` elements in turn determine the types of market data entries that the requestor is interested in. The example below demonstrates requesting the current snapshot of the top-of-book bid and ask for a single currency pair, and responding to the request with a `MarketDataSnapshotFullRefresh` (`MsgType`=W):
 
